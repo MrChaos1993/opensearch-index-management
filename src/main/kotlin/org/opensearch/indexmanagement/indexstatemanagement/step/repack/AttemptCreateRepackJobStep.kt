@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-package org.opensearch.indexmanagement.indexstatemanagement.step.forcemerge
+package org.opensearch.indexmanagement.indexstatemanagement.step.repack
 
 import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.DelicateCoroutinesApi
@@ -13,38 +13,40 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.apache.logging.log4j.LogManager
 import org.opensearch.ExceptionsHelper
-import org.opensearch.action.admin.indices.forcemerge.ForceMergeRequest
-import org.opensearch.action.admin.indices.forcemerge.ForceMergeResponse
+import org.opensearch.action.admin.indices.upgrade.post.UpgradeRequest
+import org.opensearch.action.admin.indices.upgrade.post.UpgradeResponse
 import org.opensearch.core.rest.RestStatus
-import org.opensearch.indexmanagement.indexstatemanagement.action.ForceMergeAction
 import org.opensearch.indexmanagement.opensearchapi.getUsefulCauseString
 import org.opensearch.indexmanagement.opensearchapi.suspendUntil
 import org.opensearch.indexmanagement.spi.indexstatemanagement.Step
-import org.opensearch.indexmanagement.spi.indexstatemanagement.model.ActionProperties
 import org.opensearch.indexmanagement.spi.indexstatemanagement.model.ManagedIndexMetaData
 import org.opensearch.indexmanagement.spi.indexstatemanagement.model.StepMetaData
 import org.opensearch.transport.RemoteTransportException
 import java.time.Instant
 
-class AttemptCallForceMergeStep(private val action: ForceMergeAction) : Step(name) {
+class AttemptCreateRepackJobStep : Step(NAME) {
     private val logger = LogManager.getLogger(javaClass)
+    private val info = mutableMapOf<String, Any>()
     private var stepStatus = StepStatus.STARTING
-    private var info: Map<String, Any>? = null
 
     @OptIn(DelicateCoroutinesApi::class)
     @Suppress("TooGenericExceptionCaught", "ComplexMethod")
-    override suspend fun execute(): AttemptCallForceMergeStep {
+    override suspend fun execute(): Step {
         val context = this.context ?: return this
         val indexName = context.metadata.index
+
+        logger.info("Starting repack job")
         try {
             val startTime = Instant.now().toEpochMilli()
-            val request = ForceMergeRequest(indexName).maxNumSegments(action.maxNumSegments)
-            var response: ForceMergeResponse? = null
+            val request = UpgradeRequest(indexName)
+            var response: UpgradeResponse? = null
             var throwable: Throwable? = null
-            // TODO: add stop mechanism when force merge finished
-            GlobalScope.launch(Dispatchers.IO + CoroutineName("ISM-ForceMerge-$indexName")) {
+            // TODO: add stop mechanism when index repacked
+            // TODO: check how upgradeRequest works, maybe I don't need to resend upgradeRequest, so can remove coroutine
+            GlobalScope.launch(Dispatchers.IO + CoroutineName("ISM-Repack-$indexName")) {
                 try {
-                    response = context.client.admin().indices().suspendUntil { forceMerge(request, it) }
+                    logger.info("Sending upgrade request")
+                    response = context.client.admin().indices().suspendUntil { upgrade(request, it) }
                     if (response?.status == RestStatus.OK) {
                         logger.info(getSuccessMessage(indexName))
                     } else {
@@ -63,16 +65,15 @@ class AttemptCallForceMergeStep(private val action: ForceMergeAction) : Step(nam
             val shadowedResponse = response
             if (shadowedResponse?.let { it.status == RestStatus.OK } != false) {
                 stepStatus = StepStatus.COMPLETED
-                info = mapOf("message" to if (shadowedResponse == null) getSuccessfulCallMessage(indexName) else getSuccessMessage(indexName))
+                info["message"] =
+                    if (shadowedResponse == null) getSuccessfulCallMessage(indexName) else getSuccessMessage(indexName)
             } else {
-                // Otherwise the request to force merge encountered some problem
+                // Otherwise the request to repack encountered some problem
                 stepStatus = StepStatus.FAILED
-                info =
-                    mapOf(
-                        "message" to getFailedMessage(indexName),
-                        "status" to shadowedResponse.status,
-                        "shard_failures" to shadowedResponse.shardFailures.map { it.getUsefulCauseString() },
-                    )
+
+                info["message"] = getFailedMessage(indexName)
+                info["status"] = shadowedResponse.status
+                info["shard_failures"] = shadowedResponse.shardFailures.map { it.getUsefulCauseString() }
             }
         } catch (e: RemoteTransportException) {
             handleException(indexName, ExceptionsHelper.unwrapCause(e) as Exception)
@@ -87,35 +88,31 @@ class AttemptCallForceMergeStep(private val action: ForceMergeAction) : Step(nam
         val message = getFailedMessage(indexName)
         logger.error(message, e)
         stepStatus = StepStatus.FAILED
-        val mutableInfo = mutableMapOf("message" to message)
+        info["message"] = message
         val errorMessage = e.message
-        if (errorMessage != null) mutableInfo["cause"] = errorMessage
-        info = mutableInfo.toMap()
+        if (errorMessage != null) info["cause"] = errorMessage
     }
 
-    override fun getUpdatedManagedIndexMetadata(currentMetadata: ManagedIndexMetaData): ManagedIndexMetaData {
-        // Saving maxNumSegments in ActionProperties after the force merge operation has begun so that if a ChangePolicy occurred
-        // in between this step and WaitForForceMergeStep, a cached segment count expected from the operation is available
-        val currentActionMetaData = currentMetadata.actionMetaData
-        return currentMetadata.copy(
-            actionMetaData = currentActionMetaData?.copy(actionProperties = ActionProperties(maxNumSegments = action.maxNumSegments)),
-            stepMetaData = StepMetaData(name, getStepStartTime(currentMetadata).toEpochMilli(), stepStatus),
+    override fun getUpdatedManagedIndexMetadata(currentMetadata: ManagedIndexMetaData): ManagedIndexMetaData =
+        currentMetadata.copy(
+            stepMetaData = StepMetaData(
+                AttemptUpdateIndexSettingsStep.NAME,
+                getStepStartTime(currentMetadata).toEpochMilli(),
+                stepStatus,
+            ),
             transitionTo = null,
             info = info,
         )
-    }
 
-    override fun isIdempotent() = false
+    override fun isIdempotent(): Boolean = false
 
     companion object {
-        const val name = "attempt_call_force_merge"
+        const val NAME = "attempt_create_repack_job_step"
         const val FIVE_MINUTES_IN_MILLIS = 1000 * 60 * 5 // how long to wait for the force merge request before moving on
         const val FIVE_SECONDS_IN_MILLIS = 1000L * 5L // delay
 
-        fun getFailedMessage(index: String) = "Failed to start force merge [index=$index]"
-
-        fun getSuccessfulCallMessage(index: String) = "Successfully called force merge [index=$index]"
-
-        fun getSuccessMessage(index: String) = "Successfully completed force merge [index=$index]"
+        fun getFailedMessage(index: String) = "Failed to start repack [index=$index]"
+        fun getSuccessfulCallMessage(index: String) = "Successfully called repack [index=$index]"
+        fun getSuccessMessage(index: String) = "Successfully completed repack [index=$index]"
     }
 }

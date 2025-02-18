@@ -180,6 +180,13 @@
                     }
                   }
                 },
+                "repack": {
+                  "properties": {
+                    "new_codec": {
+                      "type": "text"
+                    }
+                  }
+                },
                 "read_only": {
                   "type": "object"
                 },
