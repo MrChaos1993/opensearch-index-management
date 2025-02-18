@@ -19,6 +19,7 @@ import org.opensearch.indexmanagement.indexstatemanagement.action.NotificationAc
 import org.opensearch.indexmanagement.indexstatemanagement.action.OpenActionParser
 import org.opensearch.indexmanagement.indexstatemanagement.action.ReadOnlyActionParser
 import org.opensearch.indexmanagement.indexstatemanagement.action.ReadWriteActionParser
+import org.opensearch.indexmanagement.indexstatemanagement.action.RepackActionParser
 import org.opensearch.indexmanagement.indexstatemanagement.action.ReplicaCountActionParser
 import org.opensearch.indexmanagement.indexstatemanagement.action.RolloverActionParser
 import org.opensearch.indexmanagement.indexstatemanagement.action.RollupActionParser
@@ -56,6 +57,7 @@ class ISMActionsParser private constructor() {
             TransformActionParser(),
             StopReplicationActionParser(),
             ConvertIndexToRemoteActionParser(),
+            RepackActionParser(),
         )
 
     val customActionExtensionMap = mutableMapOf<String, String>()
