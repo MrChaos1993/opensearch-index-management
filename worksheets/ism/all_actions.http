@@ -485,3 +485,48 @@ Content-Type: application/json
 ###
 PUT http://localhost:9200/allocation_index
 Content-Type: application/json
+
+###
+PUT localhost:9200/_opendistro/_ism/policies/repack
+Content-Type: application/json
+
+{
+  "policy": {
+    "description": "action test",
+    "default_state": "action",
+    "states": [
+      {
+        "name": "action",
+        "actions": [
+          {
+            "repack": {
+              "new_codec": "zlib"
+            }
+          }
+        ],
+        "transitions": [
+          {
+            "state_name": "delete"
+          }
+        ]
+      },
+      {
+        "name": "delete",
+        "actions": [
+          {
+            "delete": {}
+          }
+        ],
+        "transitions": []
+      }
+    ],
+    "ism_template": {
+      "index_patterns": ["repack*"],
+      "priority": 100
+    }
+  }
+}
+
+###
+PUT http://localhost:9200/repack_index
+Content-Type: application/json

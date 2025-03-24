@@ -573,6 +573,28 @@ abstract class IndexStateManagementRestTestCase : IndexManagementRestTestCase() 
         }
     }
 
+    // Validate all segment has specified key and value in attributes
+    protected fun validateSegmentsAttributes(index: String, expectedKey: String, expectedValue: String): Boolean {
+        val response = client().makeRequest("GET", "/$index/_segments")
+
+        assertEquals("Segments request failed", RestStatus.OK, response.restStatus())
+        // indices->index_name->shards->{"0","1",...}->[]->"segments"->{"_0",...}->"attributes"
+        return (((response.asMap()["indices"] as Map<*, *>)[index] as Map<*, *>)["shards"] as Map<*, *>)
+            .filterValues { shard ->
+                val segments = shard as List<*>
+                logger.info("segments: {}", segments)
+                segments.any { segment ->
+                    val s = segment as Map<*, *>
+                    (s["segments"] as Map<*, *>).values.any { segmentInfo ->
+                        val si = segmentInfo as Map<*, *>
+                        val attributes = si["attributes"] as Map<*, *>?
+
+                        (attributes == null) || attributes[expectedKey] != expectedValue
+                    }
+                }
+            }.isEmpty()
+    }
+
     /** Get shard segment stats for [index] */
     private fun getShardSegmentStats(index: String): Map<String, Any> {
         val response = client().makeRequest("GET", "/$index/_stats/segments?level=shards")
